@@ -5,7 +5,7 @@ from io import BytesIO
 
 
 def read_byte(content):
-    return content[:2]
+    return int(content[:2], 16)
 
 
 def read_short(content):
@@ -90,11 +90,16 @@ def decode(msg_id, hex_content, debug):
     if not os.path.isfile(definition_path):
         result["result"] = "definition missing"
         if debug:
-            result["data"]: hex_content
+            result["remaining"]: hex_content
         return result
 
     definition = json.load(open(definition_path))
+    return decode_def(result, hex_content, definition, debug, False)["result"]
+
+
+def decode_def(result, hex_content, definition, debug, sub):
     unk = 0
+    init_len = len(hex_content)
 
     for field in definition:
         field_type = field["type"]
@@ -129,8 +134,8 @@ def decode(msg_id, hex_content, debug):
             high = read_rrsint32(hex_content)
             hex_content = hex_content[high["len"] * 2:]
             r = {
-                "low": low,
-                "high": high
+                "low": low["r"],
+                "high": high["r"]
             }
         elif field_type == 'STRING':
             string_len = read_int(hex_content) * 2
@@ -142,6 +147,32 @@ def decode(msg_id, hex_content, debug):
                 r = "Failed to parse string"
                 result[field_name] = r
                 break
+        elif field_type == 'SCID':
+            high = read_rrsint32(hex_content)
+            if high["r"] > 0:
+                hex_content = hex_content[high["len"] * 2:]
+                low = read_rrsint32(hex_content)
+                hex_content = hex_content[low["len"] * 2:]
+                r = high["r"] * 1000000 + low["r"]
+            else:
+                r = "Failed to parse SCID"
+                result[field_name] = r
+                break
+        elif field_type == 'ARRAY':
+            arr_len = read_byte(hex_content)
+            hex_content = hex_content[2:]
+            arr_component = field["component"]
+            r = []
+            for i in range(0, arr_len):
+                arr_result = {}
+                sub = decode_def(arr_result, hex_content, arr_component, debug, True)
+                r.append(sub["result"])
+                hex_content = hex_content[sub["len"]:]
+        elif field_type == 'IGNORE':
+            return {
+                "result": result,
+                "len": init_len - len(hex_content)
+            }
 
         else:
             r = "Unknown type"
@@ -150,7 +181,10 @@ def decode(msg_id, hex_content, debug):
 
         result[field_name] = r
 
-    if len(hex_content) > 0 and debug:
-        result["remainings"] = hex_content
+    if len(hex_content) > 0 and debug and not sub:
+        result["remaining"] = hex_content
 
-    return result
+    return {
+        "result": result,
+        "len": init_len - len(hex_content)
+    }
